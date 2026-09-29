@@ -1,0 +1,166 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #0f172a;
+}
+
+/* Landing Page */
+
+.landing {
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #0f172a;
+}
+
+.landing-card {
+  width: 420px;
+  padding: 40px;
+  background: #1e293b;
+  border-radius: 16px;
+  text-align: center;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+}
+
+.landing-card .logo {
+  font-size: 28px;
+  font-weight: bold;
+  color: white;
+  margin-bottom: 25px;
+}
+
+.landing-card h1 {
+  color: white;
+  font-size: 25px;
+  margin-bottom: 10px;
+}
+
+.landing-card p {
+  color: #94a3b8;
+  margin-bottom: 30px;
+  line-height: 1.5;
+}
+
+.landing-card input {
+  width: 100%;
+  padding: 13px;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  background: #0f172a;
+  color: white;
+  font-size: 15px;
+  outline: none;
+  margin-bottom: 12px;
+}
+
+.landing-card input:focus {
+  border-color: #38bdf8;
+}
+
+.primary-btn,
+.secondary-btn {
+  width: 100%;
+  padding: 13px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: bold;
+}
+
+.primary-btn {
+  background: #2563eb;
+  color: white;
+}
+
+.primary-btn:hover {
+  background: #1d4ed8;
+}
+
+.secondary-btn {
+  background: #334155;
+  color: white;
+}
+
+.secondary-btn:hover {
+  background: #475569;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 25px 0;
+  color: #64748b;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #475569;
+}
+
+/* Editor */
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #0f172a;
+}
+
+.header {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 25px;
+  background: #1e293b;
+  color: white;
+  border-bottom: 1px solid #334155;
+}
+
+.logo {
+  font-size: 20px;
+  font-weight: bold;
+}
+
+.session {
+  color: #94a3b8;
+}
+
+.session span {
+  color: white;
+  font-weight: bold;
+  margin-left: 5px;
+}
+
+.users {
+  margin-left: auto;
+}
+
+.share-btn {
+  padding: 9px 15px;
+  border: none;
+  border-radius: 7px;
+  background: #2563eb;
+  color: white;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.share-btn:hover {
+  background: #1d4ed8;
+}
+
+.editor-container {
+  flex: 1;
+  min-height: 0;
+}
