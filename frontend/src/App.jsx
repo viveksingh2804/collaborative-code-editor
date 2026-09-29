@@ -79,24 +79,31 @@ const [userCount, setUserCount] = useState(0);
     };
   }, [sessionId]);
 
-  const handleEditorChange = (value) => {
-    const newCode = value || "";
+  const handleEditorChange = (value, changeEvent) => {
+  const newCode = value || "";
 
-    setCode(newCode);
+  setCode(newCode);
 
-    if (
-      socket.current &&
-      socket.current.readyState === WebSocket.OPEN
-    ) {
-      socket.current.send(
-        JSON.stringify({
-          type: "code",
-          sessionId: sessionId,
-          code: newCode
-        })
-      );
-    }
-  };
+  const changes = changeEvent?.changes || [];
+
+  if (
+    socket.current &&
+    socket.current.readyState === WebSocket.OPEN &&
+    changes.length > 0
+  ) {
+    socket.current.send(
+      JSON.stringify({
+        type: "operation",
+        sessionId: sessionId,
+        changes: changes.map((change) => ({
+          position: change.rangeOffset,
+          deleteCount: change.rangeLength,
+          text: change.text
+        }))
+      })
+    );
+  }
+};
 
   const copySessionLink = async () => {
     await navigator.clipboard.writeText(window.location.href);
@@ -177,19 +184,19 @@ const [userCount, setUserCount] = useState(0);
       <main className="editor-container">
 
         <Editor
-          height="100%"
-          language="java"
-          value={code}
-          onChange={handleEditorChange}
-          theme="vs-dark"
-          options={{
-            fontSize: 16,
-            minimap: {
-              enabled: false
-            },
-            automaticLayout: true
-          }}
-        />
+  height="100%"
+  language="java"
+  value={code}
+  onChange={handleEditorChange}
+  theme="vs-dark"
+  options={{
+    fontSize: 16,
+    minimap: {
+      enabled: false
+    },
+    automaticLayout: true
+  }}
+/>
 
       </main>
 
