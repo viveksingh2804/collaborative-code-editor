@@ -11,6 +11,8 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,18 +26,28 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
     private final CodeSessionRepository repository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    // Users in each room
     private final Map<String, Set<WebSocketSession>> rooms =
             new ConcurrentHashMap<>();
 
+    // Which room each user belongs to
     private final Map<String, String> userRooms =
             new ConcurrentHashMap<>();
 
-    // Operation queue for every room
+    // Operation queue for each room
     private final Map<String, ConcurrentLinkedQueue<Operation>> operationQueues =
             new ConcurrentHashMap<>();
 
-    // One worker per room
+    // One worker for each room
     private final Map<String, ExecutorService> roomExecutors =
+            new ConcurrentHashMap<>();
+
+    // Current version of every room
+    private final Map<String, Long> roomVersions =
+            new ConcurrentHashMap<>();
+
+    // Applied operation history
+    private final Map<String, List<AppliedOperation>> operationHistory =
             new ConcurrentHashMap<>();
 
     public CodeWebSocketHandler(CodeSessionRepository repository) {
@@ -44,6 +56,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
+
         System.out.println(
                 "WebSocket connected: " + session.getId()
         );
@@ -59,9 +72,9 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
 
         String type = data.get("type").asText();
 
-        // =========================
+        // ==========================================
         // JOIN
-        // =========================
+        // ==========================================
 
         if (type.equals("join")) {
 
@@ -88,6 +101,16 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                     key -> Executors.newSingleThreadExecutor()
             );
 
+            roomVersions.computeIfAbsent(
+                    sessionCode,
+                    key -> 0L
+            );
+
+            operationHistory.computeIfAbsent(
+                    sessionCode,
+                    key -> new ArrayList<>()
+            );
+
             CodeSession codeSession =
                     repository.findBySessionCode(sessionCode)
                             .orElseGet(() ->
@@ -99,11 +122,12 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                                     )
                             );
 
-            // Send current code to joining user
+            // Send current code + current version
             session.sendMessage(
                     new TextMessage(
                             createCodeMessage(
-                                    codeSession.getCode()
+                                    codeSession.getCode(),
+                                    roomVersions.get(sessionCode)
                             )
                     )
             );
@@ -119,9 +143,9 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        // =========================
+        // ==========================================
         // OPERATION
-        // =========================
+        // ==========================================
 
         if (type.equals("operation")) {
 
@@ -131,6 +155,11 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
             if (sessionCode == null) {
                 return;
             }
+
+            long baseVersion =
+                    data.has("baseVersion")
+                            ? data.get("baseVersion").asLong()
+                            : 0L;
 
             JsonNode changes =
                     data.get("changes");
@@ -142,7 +171,6 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                 return;
             }
 
-            // Add every Monaco change to queue
             for (JsonNode change : changes) {
 
                 Operation operation =
@@ -150,22 +178,22 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                                 session.getId(),
                                 change.get("position").asInt(),
                                 change.get("deleteCount").asInt(),
-                                change.get("text").asText()
+                                change.get("text").asText(),
+                                baseVersion
                         );
 
                 queue.add(operation);
             }
 
-            // Process operations sequentially
             processQueue(sessionCode);
 
             return;
         }
     }
 
-    // =========================
-    // OPERATION QUEUE
-    // =========================
+    // ==========================================
+    // PROCESS QUEUE
+    // ==========================================
 
     private void processQueue(String sessionCode) {
 
@@ -207,9 +235,9 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         });
     }
 
-    // =========================
+    // ==========================================
     // APPLY OPERATION
-    // =========================
+    // ==========================================
 
     private void applyOperation(
             String sessionCode,
@@ -225,14 +253,23 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
 
         String code = codeSession.getCode();
 
-        int position = operation.position();
+        // Transform against operations that happened
+        // after this client's base version
+        Operation transformed =
+                transformOperation(
+                        sessionCode,
+                        operation
+                );
+
+        int position =
+                transformed.position();
 
         if (position < 0 || position > code.length()) {
             return;
         }
 
         int deleteCount =
-                operation.deleteCount();
+                transformed.deleteCount();
 
         int end =
                 Math.min(
@@ -242,76 +279,216 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
 
         String newCode =
                 code.substring(0, position)
-                        + operation.text()
+                        + transformed.text()
                         + code.substring(end);
 
-        // Save updated code
         codeSession.setCode(newCode);
+
         repository.save(codeSession);
 
-        // Broadcast complete updated state
-        broadcastCode(
-                sessionCode,
-                newCode,
-                operation.userId()
+        // Increment room version
+        long newVersion =
+                roomVersions.merge(
+                        sessionCode,
+                        1L,
+                        Long::sum
+                );
+
+        // Save operation history
+        operationHistory
+                .computeIfAbsent(
+                        sessionCode,
+                        key -> new ArrayList<>()
+                )
+                .add(
+                        new AppliedOperation(
+                                transformed.userId(),
+                                transformed.position(),
+                                transformed.deleteCount(),
+                                transformed.text(),
+                                newVersion
+                        )
+                );
+
+        // Send version acknowledgement to sender
+        sendVersionAck(
+                operation.userId(),
+                newVersion
         );
 
+        // Send updated code to other users
+        broadcastOperation(
+        sessionCode,
+        transformed,
+        operation.userId(),
+        newVersion
+);
+
         System.out.println(
-                "Operation processed | session="
-                        + sessionCode
-                        + " | position="
-                        + position
-                        + " | delete="
-                        + deleteCount
-                        + " | text="
-                        + operation.text()
+                "Operation processed"
+                        + " | session=" + sessionCode
+                        + " | position=" + transformed.position()
+                        + " | delete=" + transformed.deleteCount()
+                        + " | text=" + transformed.text()
+                        + " | version=" + newVersion
         );
     }
 
-    // =========================
-    // BROADCAST CODE
-    // =========================
+    // ==========================================
+    // BASIC OT TRANSFORMATION
+    // ==========================================
 
-    private void broadcastCode(
+    private Operation transformOperation(
             String sessionCode,
-            String code,
-            String senderId) {
+            Operation operation) {
 
-        Set<WebSocketSession> users =
-                rooms.get(sessionCode);
+        List<AppliedOperation> history =
+                operationHistory.get(sessionCode);
 
-        if (users == null) {
-            return;
+        if (history == null) {
+            return operation;
         }
 
-        String message =
-                createCodeMessage(code);
+        int position =
+                operation.position();
 
-        for (WebSocketSession user : users) {
+        for (AppliedOperation previous : history) {
 
-            try {
+            if (previous.version()
+                    <= operation.baseVersion()) {
 
-                if (user.isOpen()
-                        && !user.getId().equals(senderId)) {
+                continue;
+            }
 
-                    user.sendMessage(
-                            new TextMessage(message)
-                    );
+            int previousEnd =
+                    previous.position()
+                            + previous.deleteCount();
+
+            int previousLength =
+                    previous.text().length();
+
+            int previousDelta =
+                    previousLength
+                            - previous.deleteCount();
+
+            // Previous operation is before ours
+            if (previousEnd <= position) {
+
+                position += previousDelta;
+            }
+
+            // Both insert at same position
+            else if (
+                    previous.deleteCount() == 0
+                            && previous.position() == position
+            ) {
+
+                // Deterministic ordering
+                if (previous.userId()
+                        .compareTo(operation.userId()) < 0) {
+
+                    position += previousLength;
                 }
+            }
+        }
 
-            } catch (Exception e) {
+        return new Operation(
+                operation.userId(),
+                position,
+                operation.deleteCount(),
+                operation.text(),
+                operation.baseVersion()
+        );
+    }
 
-                System.out.println(
-                        "Broadcast error: "
-                                + e.getMessage()
+    // ==========================================
+    // BROADCAST CODE
+    // ==========================================
+
+   private void broadcastOperation(
+        String sessionCode,
+        Operation operation,
+        String senderId,
+        long version) {
+
+    Set<WebSocketSession> users =
+            rooms.get(sessionCode);
+
+    if (users == null) {
+        return;
+    }
+
+    String message =
+            "{\"type\":\"operation\","
+            + "\"position\":" + operation.position()
+            + ",\"deleteCount\":" + operation.deleteCount()
+            + ",\"text\":" + objectMapper.valueToTree(operation.text())
+            + ",\"version\":" + version
+            + "}";
+
+    for (WebSocketSession user : users) {
+
+        try {
+
+            if (user.isOpen()
+                    && !user.getId().equals(senderId)) {
+
+                user.sendMessage(
+                        new TextMessage(message)
                 );
+            }
+
+        } catch (Exception e) {
+
+            System.out.println(
+                    "Operation broadcast error: "
+                            + e.getMessage()
+            );
+        }
+    }
+}
+    // ==========================================
+    // VERSION ACK
+    // ==========================================
+
+    private void sendVersionAck(
+            String userId,
+            long version) {
+
+        for (Set<WebSocketSession> users : rooms.values()) {
+
+            for (WebSocketSession user : users) {
+
+                if (user.getId().equals(userId)
+                        && user.isOpen()) {
+
+                    try {
+
+                        user.sendMessage(
+                                new TextMessage(
+                                        "{\"type\":\"ack\",\"version\":"
+                                                + version
+                                                + "}"
+                                )
+                        );
+
+                    } catch (Exception e) {
+
+                        System.out.println(
+                                "ACK error: "
+                                        + e.getMessage()
+                        );
+                    }
+
+                    return;
+                }
             }
         }
     }
 
-    // =========================
+    // ==========================================
     // USER COUNT
-    // =========================
+    // ==========================================
 
     private void broadcastUserCount(
             String sessionCode) {
@@ -335,6 +512,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
             try {
 
                 if (user.isOpen()) {
+
                     user.sendMessage(
                             new TextMessage(message)
                     );
@@ -350,9 +528,9 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    // =========================
+    // ==========================================
     // DISCONNECT
-    // =========================
+    // ==========================================
 
     @Override
     public void afterConnectionClosed(
@@ -386,6 +564,14 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                             sessionCode
                     );
 
+                    roomVersions.remove(
+                            sessionCode
+                    );
+
+                    operationHistory.remove(
+                            sessionCode
+                    );
+
                 } else {
 
                     broadcastUserCount(
@@ -401,17 +587,24 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         );
     }
 
-    // =========================
-    // HELPERS
-    // =========================
+    // ==========================================
+    // JSON CODE MESSAGE
+    // ==========================================
 
     private String createCodeMessage(
-            String code) {
+            String code,
+            long version) {
 
         return "{\"type\":\"code\",\"code\":"
                 + objectMapper.valueToTree(code)
+                + ",\"version\":"
+                + version
                 + "}";
     }
+
+    // ==========================================
+    // DEFAULT CODE
+    // ==========================================
 
     private String defaultCode() {
 
@@ -424,14 +617,23 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                 """;
     }
 
-    // =========================
+    // ==========================================
     // OPERATION RECORD
-    // =========================
+    // ==========================================
 
     private record Operation(
             String userId,
             int position,
             int deleteCount,
-            String text
+            String text,
+            long baseVersion
+    ) {}
+
+    private record AppliedOperation(
+            String userId,
+            int position,
+            int deleteCount,
+            String text,
+            long version
     ) {}
 }
