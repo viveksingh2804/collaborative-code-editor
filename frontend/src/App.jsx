@@ -3,335 +3,174 @@ import Editor from "@monaco-editor/react";
 import "./App.css";
 
 function App() {
+
   const socket = useRef(null);
   const editorRef = useRef(null);
-
-  // Prevent remote operations from being sent back
-  const applyingRemoteChange = useRef(false);
-
-  // Keep latest version without React state delay
-  const versionRef = useRef(0);
+  const remoteChange = useRef(false);
 
   const params = new URLSearchParams(window.location.search);
-  const sessionId = params.get("session");
+  const sessionId = params.get("session") || "ABC123";
 
   const [code, setCode] = useState("");
   const [connected, setConnected] = useState(false);
   const [userCount, setUserCount] = useState(0);
-  const [version, setVersion] = useState(0);
-  const [joinCode, setJoinCode] = useState("");
-
-  // =========================
-  // CREATE SESSION
-  // =========================
-
-  const generateSessionId = () => {
-    return Math.random()
-      .toString(36)
-      .substring(2, 8)
-      .toUpperCase();
-  };
-
-  const createSession = () => {
-    const newSession = generateSessionId();
-    window.location.href = `/?session=${newSession}`;
-  };
-
-  // =========================
-  // JOIN SESSION
-  // =========================
-
-  const joinSession = () => {
-    const id = joinCode.trim().toUpperCase();
-
-    if (!id) {
-      alert("Please enter a session ID");
-      return;
-    }
-
-    window.location.href = `/?session=${id}`;
-  };
-
-  // =========================
-  // WEBSOCKET
-  // =========================
 
   useEffect(() => {
-    if (!sessionId) {
-      return;
-    }
 
-    const ws = new WebSocket("ws://localhost:8080/ws");
+    const ws = new WebSocket(
+      "ws://localhost:8080/ws"
+    );
 
     socket.current = ws;
 
     ws.onopen = () => {
-      console.log("WebSocket connected");
+
+      console.log("WEBSOCKET CONNECTED");
 
       setConnected(true);
 
       ws.send(
         JSON.stringify({
           type: "join",
-          sessionId: sessionId,
+          sessionId: sessionId
         })
       );
     };
 
     ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
 
-      // =========================
-      // INITIAL / FULL CODE
-      // =========================
+      console.log(
+        "SERVER MESSAGE:",
+        event.data
+      );
 
-      if (data.type === "code") {
-        applyingRemoteChange.current = true;
+      try {
 
-        setCode(data.code);
+        const data =
+          JSON.parse(event.data);
 
-        if (data.version !== undefined) {
-          versionRef.current = data.version;
-          setVersion(data.version);
-        }
+        // ==========================
+        // CODE FROM SERVER
+        // ==========================
 
-        return;
-      }
+        if (data.type === "code") {
 
-      // =========================
-      // REMOTE OPERATION
-      // =========================
+          remoteChange.current = true;
 
-      if (data.type === "operation") {
-        const editor = editorRef.current;
+          setCode(data.code);
 
-        if (!editor) {
+          if (editorRef.current) {
+
+            const model =
+              editorRef.current.getModel();
+
+            if (
+              model &&
+              model.getValue() !== data.code
+            ) {
+
+              model.setValue(data.code);
+            }
+          }
+
+          setTimeout(() => {
+            remoteChange.current = false;
+          }, 100);
+
           return;
         }
 
-        const model = editor.getModel();
+        // ==========================
+        // USER COUNT
+        // ==========================
 
-        if (!model) {
+        if (data.type === "users") {
+
+          setUserCount(data.count);
+
           return;
         }
 
-        applyingRemoteChange.current = true;
+      } catch (error) {
 
-        const position = data.position;
-        const deleteCount = data.deleteCount;
-        const text = data.text || "";
-
-        const startPosition =
-          model.getPositionAt(position);
-
-        const endPosition =
-          model.getPositionAt(
-            position + deleteCount
-          );
-
-        editor.executeEdits(
-          "remote-operation",
-          [
-            {
-              range: {
-                startLineNumber:
-                  startPosition.lineNumber,
-
-                startColumn:
-                  startPosition.column,
-
-                endLineNumber:
-                  endPosition.lineNumber,
-
-                endColumn:
-                  endPosition.column,
-              },
-
-              text: text,
-            },
-          ]
+        console.error(
+          "MESSAGE ERROR:",
+          error
         );
-
-        setCode(editor.getValue());
-
-        if (data.version !== undefined) {
-          versionRef.current = data.version;
-          setVersion(data.version);
-        }
-
-        applyingRemoteChange.current = false;
-
-        return;
       }
-
-      // =========================
-      // USER COUNT
-      // =========================
-
-      if (data.type === "users") {
-        setUserCount(data.count);
-        return;
-      }
-
-      // =========================
-      // VERSION ACK
-      // =========================
-
-      if (data.type === "ack") {
-        versionRef.current = data.version;
-        setVersion(data.version);
-        return;
-      }
-    };
-
-    ws.onclose = () => {
-      console.log("WebSocket disconnected");
-      setConnected(false);
     };
 
     ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
+
+      console.error(
+        "WEBSOCKET ERROR:",
+        error
+      );
+    };
+
+    ws.onclose = () => {
+
+      console.log(
+        "WEBSOCKET DISCONNECTED"
+      );
+
+      setConnected(false);
     };
 
     return () => {
       ws.close();
     };
+
   }, [sessionId]);
 
-  // =========================
-  // EDITOR CHANGE
-  // =========================
+  // ==========================
+  // MONACO READY
+  // ==========================
 
-  const handleEditorChange = (
-    value,
-    changeEvent
-  ) => {
+  const handleEditorMount = (editor) => {
+
+    editorRef.current = editor;
+  };
+
+  // ==========================
+  // LOCAL TYPING
+  // ==========================
+
+  const handleEditorChange = (value) => {
+
     const newCode = value || "";
 
     setCode(newCode);
 
-    // Remote operation should NOT be sent back
-    if (applyingRemoteChange.current) {
+    // Remote update ko server par
+    // dobara mat bhejo
+    if (remoteChange.current) {
       return;
     }
-
-    const changes =
-      changeEvent?.changes || [];
 
     if (
       socket.current &&
       socket.current.readyState ===
-        WebSocket.OPEN &&
-      changes.length > 0
+        WebSocket.OPEN
     ) {
+
       socket.current.send(
         JSON.stringify({
-          type: "operation",
-
+          type: "code",
           sessionId: sessionId,
-
-          baseVersion:
-            versionRef.current,
-
-          changes: changes.map(
-            (change) => ({
-              position:
-                change.rangeOffset,
-
-              deleteCount:
-                change.rangeLength,
-
-              text:
-                change.text,
-            })
-          ),
+          code: newCode
         })
       );
-    }
-  };
 
-  // =========================
-  // COPY LINK
-  // =========================
-
-  const copySessionLink = async () => {
-    try {
-      await navigator.clipboard.writeText(
-        window.location.href
+      console.log(
+        "SENT CODE:",
+        newCode
       );
-
-      alert("Session link copied!");
-    } catch (error) {
-      console.error(error);
     }
   };
-
-  // =========================
-  // LANDING PAGE
-  // =========================
-
-  if (!sessionId) {
-    return (
-      <div className="landing">
-
-        <div className="landing-card">
-
-          <div className="logo">
-            ⚡ CollabCode
-          </div>
-
-          <h1>
-            Collaborative Code Editor
-          </h1>
-
-          <p>
-            Code together in real-time
-            with your friends and teammates.
-          </p>
-
-          <button
-            className="primary-btn"
-            onClick={createSession}
-          >
-            🚀 Create New Session
-          </button>
-
-          <div className="divider">
-            <span>OR</span>
-          </div>
-
-          <input
-            type="text"
-            placeholder="Enter Session ID"
-            value={joinCode}
-            onChange={(e) =>
-              setJoinCode(e.target.value)
-            }
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                joinSession();
-              }
-            }}
-          />
-
-          <button
-            className="secondary-btn"
-            onClick={joinSession}
-          >
-            Join Session
-          </button>
-
-        </div>
-
-      </div>
-    );
-  }
-
-  // =========================
-  // EDITOR PAGE
-  // =========================
 
   return (
+
     <div className="app">
 
       <header className="header">
@@ -346,18 +185,28 @@ function App() {
         </div>
 
         <div className="users">
+
           {connected
-            ? `🟢 ${userCount} ${
-                userCount === 1
-                  ? "User"
-                  : "Users"
-              }`
-            : "🔴 Offline"}
+            ? "🟢"
+            : "🔴"}
+
+          {" "}
+          {userCount} Users
+
         </div>
 
         <button
-          className="share-btn"
-          onClick={copySessionLink}
+          className="share-button"
+          onClick={() => {
+
+            navigator.clipboard.writeText(
+              window.location.href
+            );
+
+            alert(
+              "Session link copied!"
+            );
+          }}
         >
           🔗 Share
         </button>
@@ -369,24 +218,17 @@ function App() {
         <Editor
           height="100%"
           language="java"
-          value={code}
-
-          onMount={(editor) => {
-            editorRef.current = editor;
-          }}
-
-          onChange={handleEditorChange}
-
           theme="vs-dark"
-
+          value={code}
+          onMount={handleEditorMount}
+          onChange={handleEditorChange}
           options={{
             fontSize: 16,
-
             minimap: {
-              enabled: false,
+              enabled: false
             },
-
             automaticLayout: true,
+            scrollBeyondLastLine: false
           }}
         />
 
