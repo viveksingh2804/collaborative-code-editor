@@ -28,9 +28,8 @@ function App() {
 
   useEffect(() => {
 
-    const ws =
-      new WebSocket(
-  `ws://${window.location.hostname}:8080/ws`
+const ws = new WebSocket(
+  "wss://scholarship-troubleshooting-instrumentation-expertise.trycloudflare.com/ws"
 );
 
     socket.current = ws;
@@ -470,7 +469,7 @@ const runCode = async () => {
   try {
 
    const response = await fetch(
-  `${window.location.protocol}//${window.location.hostname}:8080/api/execute`,
+  "https://scholarship-troubleshooting-instrumentation-expertise.trycloudflare.com/api/execute",
   {
     method: "POST",
     headers: {
