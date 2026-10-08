@@ -1,4 +1,4 @@
-# ⚡ CollabCode — Collaborative Code Editor
+≈# ⚡ CollabCode — Collaborative Code Editor
 
 A real-time collaborative code editor that allows multiple users to write and edit code together in the same session.
 
