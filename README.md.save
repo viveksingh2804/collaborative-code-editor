@@ -1,0 +1,165 @@
+# ⚡ CollabCode — Collaborative Code Editor
+
+A real-time collaborative coding platform where multiple users can write, edit, compile, and execute Java code together in the same session.
+
+Built with React, Monaco Editor, Spring Boot WebSockets, and MySQL.
+
+## 🚀 Features
+
+- Real-time collaborative code editing
+- Multiple users in the same session
+- Character-level operation synchronization
+- Operation-based synchronization
+- Version tracking
+- Undo / Redo
+- MySQL code persistence
+- Shareable session URLs
+- Connected user count
+- Monaco Editor
+- Java syntax highlighting
+- Java code compilation
+- Java code execution
+- Compilation error handling
+- Runtime error handling
+- Program execution timeout
+- Live output console
+
+## 🛠️ Tech Stack
+
+### Frontend
+
+- React
+- Vite
+- JavaScript
+- Monaco Editor
+- CSS
+
+### Backend
+
+- Java
+- Spring Boot
+- Spring WebSocket
+- Spring Data JPA
+- Hibernate
+- Maven
+
+### Database
+
+- MySQL
+
+### Code Execution
+
+- Java Compiler (`javac`)
+- Java Runtime (`java`)
+- Temporary execution directories
+- Execution timeout
+
+## 🏗️ Architecture
+
+```text
+                    ┌──────────────────────┐
+                    │      React App       │
+                    │    Run Code Button   │
+                    │    Output Console    │
+                    └──────────┬───────────┘
+                               │
+                    ┌──────────┴──────────┐
+                    │                     │
+                 WebSocket             REST API
+                    │                     │
+                    ▼                     ▼
+          ┌─────────────────┐   ┌─────────────────┐
+          │  Collaboration  │   │ Code Execution  │
+          │     Server      │   │    Controller   │
+          │                 │   │                 │
+          │ Operations      │   │ javac           │
+          │ Versioning      │   │ java            │
+          │ Undo / Redo     │   │ Timeout         │
+          └────────┬────────┘   └─────────────────┘
+                   │
+                   ▼
+          ┌─────────────────┐
+          │      MySQL      │
+          │                 │
+          │ Code Sessions   │
+          └─────────────────┘# ⚡ CollabCode — Collaborative Code Editor
+
+A real-time collaborative code editor that allows multiple users to write and edit code together in the same session.
+
+The project is built using React, Monaco Editor, Spring Boot WebSockets, and MySQL, with operation-based synchronization and undo/redo support.
+
+---
+
+## 🚀 Features
+
+- ✍️ Real-time collaborative code editing
+- 👥 Multiple users in the same session
+- ⚡ Character-level operation synchronization
+- 🔄 Operation-based synchronization
+- 🔢 Version tracking for concurrent edits
+- ↩️ Undo support
+- ↪️ Redo support
+- 💾 MySQL-based code persistence
+- 🔗 Shareable session URLs
+- 🟢 Real-time connected-user count
+- 💻 Monaco Editor with Java syntax highlighting
+- 🌐 WebSocket-based communication
+
+---
+
+## 🛠️ Tech Stack
+
+### Frontend
+
+- React
+- Vite
+- Monaco Editor
+- JavaScript
+- CSS
+
+### Backend
+
+- Java
+- Spring Boot
+- Spring WebSocket
+- Maven
+- Jackson
+
+### Database
+
+- MySQL
+- Spring Data JPA
+- Hibernate
+
+---
+
+## 🏗️ Architecture
+
+```text
+                ┌─────────────────────┐
+                │     React Client    │
+                │                     │
+                │   Monaco Editor     │
+                └──────────┬──────────┘
+                           │
+                      WebSocket
+                           │
+                           ▼
+                ┌─────────────────────┐
+                │   Spring Boot       │
+                │   WebSocket Server  │
+                │                     │
+                │ Operation Handling  │
+                │ Version Tracking    │
+                │ Undo / Redo         │
+                │ Session Management  │
+                └──────────┬──────────┘
+                           │
+                         JPA
+                           │
+                           ▼
+                ┌─────────────────────┐
+                │       MySQL         │
+                │                     │
+                │   Code Sessions     │
+                └─────────────────────┘

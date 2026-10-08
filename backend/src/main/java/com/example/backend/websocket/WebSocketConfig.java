@@ -16,12 +16,12 @@ public class WebSocketConfig implements WebSocketConfigurer {
     }
 
     @Override
-public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
+    public void registerWebSocketHandlers(
+            WebSocketHandlerRegistry registry) {
 
-    registry.addHandler(codeWebSocketHandler, "/ws")
-            .setAllowedOrigins(
-                    "http://localhost:5173",
-                    "http://localhost:5174"
-            );
-}
+        registry.addHandler(
+                codeWebSocketHandler,
+                "/ws"
+        ).setAllowedOriginPatterns("*");
+    }
 }

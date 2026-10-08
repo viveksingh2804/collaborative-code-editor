@@ -161,6 +161,54 @@ body {
 }
 
 .editor-container {
-  flex: 1;
-  min-height: 0;
+  height: calc(100vh - 45px - 180px - 70px);
+}
+.toolbar {
+  height: 45px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+}
+
+.run-button {
+  padding: 7px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #22c55e;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.run-button:hover {
+  background: #16a34a;
+}
+
+.run-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.output-panel {
+  height: 180px;
+  background: #111827;
+  color: #e5e7eb;
+  border-top: 1px solid #374151;
+  overflow: auto;
+}
+
+.output-header {
+  padding: 8px 16px;
+  font-weight: 600;
+  background: #1f2937;
+  border-bottom: 1px solid #374151;
+}
+
+.output-panel pre {
+  margin: 0;
+  padding: 12px 16px;
+  font-family: monospace;
+  white-space: pre-wrap;
 }

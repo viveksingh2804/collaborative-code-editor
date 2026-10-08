@@ -20,7 +20,8 @@ function App() {
   const [code, setCode] = useState("");
   const [connected, setConnected] = useState(false);
   const [userCount, setUserCount] = useState(0);
-
+  const [output, setOutput] = useState("");
+  const [running, setRunning] = useState(false);  
   // ==========================================
   // WEBSOCKET
   // ==========================================
@@ -29,8 +30,8 @@ function App() {
 
     const ws =
       new WebSocket(
-        "ws://localhost:8080/ws"
-      );
+  `ws://${window.location.hostname}:8080/ws`
+);
 
     socket.current = ws;
 
@@ -461,7 +462,54 @@ const handleEditorChange =
   }
 };
 
+const runCode = async () => {
 
+  setRunning(true);
+  setOutput("Running...");
+
+  try {
+
+    const response = await fetch(
+      "http://localhost:8080/api/execute",
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify({
+          code: code
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (data.success) {
+
+      setOutput(
+        data.output || "Program executed successfully."
+      );
+
+    } else {
+
+      setOutput(
+        data.error || "Execution failed."
+      );
+    }
+
+  } catch (error) {
+
+    setOutput(
+      "Could not connect to execution server."
+    );
+
+  } finally {
+
+    setRunning(false);
+  }
+};
   // ==========================================
   // RENDER
   // ==========================================
@@ -514,7 +562,17 @@ const handleEditorChange =
         </button>
 
       </header>
+          <div className="toolbar">
 
+  <button
+    className="run-button"
+    onClick={runCode}
+    disabled={running}
+  >
+    {running ? "⏳ Running..." : "▶ Run Code"}
+  </button>
+
+</div>
       <main className="editor-container">
 
         <Editor
@@ -549,6 +607,11 @@ const handleEditorChange =
         />
 
       </main>
+
+      <div className="output-panel">
+        <div className="output-header">Output</div>
+        <pre>{output || "Run your code to see the output here."}</pre>
+      </div>
 
     </div>
   );
