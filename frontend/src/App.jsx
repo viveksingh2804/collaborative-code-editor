@@ -469,20 +469,18 @@ const runCode = async () => {
 
   try {
 
-    const response = await fetch(
-      "http://localhost:8080/api/execute",
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type": "application/json"
-        },
-
-        body: JSON.stringify({
-          code: code
-        })
-      }
-    );
+   const response = await fetch(
+  `${window.location.protocol}//${window.location.hostname}:8080/api/execute`,
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      code: code
+    })
+  }
+);
 
     const data = await response.json();
 
