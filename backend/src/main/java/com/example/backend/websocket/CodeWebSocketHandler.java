@@ -12,10 +12,13 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -29,6 +32,10 @@ public class CodeWebSocketHandler
     private final ObjectMapper objectMapper =
             new ObjectMapper();
 
+    // ==========================================
+    // ROOMS
+    // ==========================================
+
     // sessionId -> connected users
     private final Map<String, Set<WebSocketSession>> rooms =
             new ConcurrentHashMap<>();
@@ -37,9 +44,17 @@ public class CodeWebSocketHandler
     private final Map<String, String> userRooms =
             new ConcurrentHashMap<>();
 
+    // ==========================================
+    // VERSION
+    // ==========================================
+
     // sessionId -> current document version
     private final Map<String, Long> roomVersions =
             new ConcurrentHashMap<>();
+
+    // ==========================================
+    // OPERATION QUEUE
+    // ==========================================
 
     // sessionId -> pending operations
     private final Map<String, ConcurrentLinkedQueue<Operation>>
@@ -50,16 +65,32 @@ public class CodeWebSocketHandler
     private final Map<String, ExecutorService> roomExecutors =
             new ConcurrentHashMap<>();
 
-    // sessionId -> applied operation history
-    //
-    // history[0] = operation that changed
-    // version 0 -> version 1
-    //
-    // history[1] = operation that changed
-    // version 1 -> version 2
+    // ==========================================
+    // OPERATION HISTORY
+    // ==========================================
+
+    // sessionId -> applied operations
     private final Map<String, List<Operation>>
             operationHistory =
             new ConcurrentHashMap<>();
+
+    // ==========================================
+    // UNDO / REDO
+    // ==========================================
+
+    // websocketId -> undo stack
+    private final Map<String, Deque<OperationHistoryEntry>>
+            undoStacks =
+            new ConcurrentHashMap<>();
+
+    // websocketId -> redo stack
+    private final Map<String, Deque<OperationHistoryEntry>>
+            redoStacks =
+            new ConcurrentHashMap<>();
+
+    // ==========================================
+    // CONSTRUCTOR
+    // ==========================================
 
     public CodeWebSocketHandler(
             CodeSessionRepository repository) {
@@ -103,7 +134,7 @@ public class CodeWebSocketHandler
                 data.get("type").asText();
 
         // ==========================================
-        // JOIN SESSION
+        // JOIN
         // ==========================================
 
         if (type.equals("join")) {
@@ -121,6 +152,20 @@ public class CodeWebSocketHandler
                     key ->
                             ConcurrentHashMap.newKeySet()
             ).add(session);
+
+            // Initialize user's undo stack
+            undoStacks.computeIfAbsent(
+                    session.getId(),
+                    key ->
+                            new ConcurrentLinkedDeque<>()
+            );
+
+            // Initialize user's redo stack
+            redoStacks.computeIfAbsent(
+                    session.getId(),
+                    key ->
+                            new ConcurrentLinkedDeque<>()
+            );
 
             CodeSession codeSession =
                     repository.findBySessionCode(
@@ -140,28 +185,28 @@ public class CodeWebSocketHandler
                     0L
             );
 
-            // Initialize operation queue
+            // Initialize queue
             operationQueues.computeIfAbsent(
                     sessionCode,
                     key ->
                             new ConcurrentLinkedQueue<>()
             );
 
-            // Initialize operation history
+            // Initialize history
             operationHistory.computeIfAbsent(
                     sessionCode,
                     key ->
                             new ArrayList<>()
             );
 
-            // Initialize single executor
+            // Initialize room executor
             roomExecutors.computeIfAbsent(
                     sessionCode,
                     key ->
                             Executors.newSingleThreadExecutor()
             );
 
-            // Send current document
+            // Send current code
             session.sendMessage(
                     new TextMessage(
                             createCodeMessage(
@@ -181,12 +226,14 @@ public class CodeWebSocketHandler
                     )
             );
 
+            // Send user count
             broadcastUserCount(
                     sessionCode
             );
 
             System.out.println(
-                    "User " + session.getId()
+                    "User "
+                            + session.getId()
                             + " joined session "
                             + sessionCode
             );
@@ -264,6 +311,72 @@ public class CodeWebSocketHandler
         }
 
         // ==========================================
+        // UNDO
+        // ==========================================
+
+        if (type.equals("undo")) {
+
+            String sessionCode =
+                    userRooms.get(
+                            session.getId()
+                    );
+
+            if (sessionCode == null) {
+                return;
+            }
+
+            ExecutorService executor =
+                    roomExecutors.get(
+                            sessionCode
+                    );
+
+            if (executor != null) {
+
+                executor.submit(() ->
+                        processUndo(
+                                session.getId(),
+                                sessionCode
+                        )
+                );
+            }
+
+            return;
+        }
+
+        // ==========================================
+        // REDO
+        // ==========================================
+
+        if (type.equals("redo")) {
+
+            String sessionCode =
+                    userRooms.get(
+                            session.getId()
+                    );
+
+            if (sessionCode == null) {
+                return;
+            }
+
+            ExecutorService executor =
+                    roomExecutors.get(
+                            sessionCode
+                    );
+
+            if (executor != null) {
+
+                executor.submit(() ->
+                        processRedo(
+                                session.getId(),
+                                sessionCode
+                        )
+                );
+            }
+
+            return;
+        }
+
+        // ==========================================
         // OLD FULL CODE SYNC
         // ==========================================
 
@@ -297,7 +410,9 @@ public class CodeWebSocketHandler
                             )
                     );
 
-            codeSession.setCode(code);
+            codeSession.setCode(
+                    code
+            );
 
             repository.save(
                     codeSession
@@ -358,10 +473,6 @@ public class CodeWebSocketHandler
                                 0L
                         );
 
-                // ==================================
-                // GET HISTORY
-                // ==================================
-
                 List<Operation> history =
                         operationHistory.computeIfAbsent(
                                 sessionCode,
@@ -376,34 +487,11 @@ public class CodeWebSocketHandler
                 Operation transformedOperation =
                         operation;
 
-                /*
-                 * Example:
-                 *
-                 * Client created operation at:
-                 *
-                 * baseVersion = 2
-                 *
-                 * Server is currently at:
-                 *
-                 * version = 4
-                 *
-                 * Therefore operations:
-                 *
-                 * history[2]
-                 * history[3]
-                 *
-                 * happened after client's version.
-                 *
-                 * Transform incoming operation
-                 * against both.
-                 */
-
                 synchronized (history) {
 
                     long baseVersion =
                             operation.baseVersion();
 
-                    // Invalid future version
                     if (baseVersion >
                             currentVersion) {
 
@@ -465,8 +553,7 @@ public class CodeWebSocketHandler
                         Math.max(
                                 0,
                                 Math.min(
-                                        transformedOperation
-                                                .position(),
+                                        transformedOperation.position(),
                                         currentCode.length()
                                 )
                         );
@@ -479,12 +566,27 @@ public class CodeWebSocketHandler
                         Math.max(
                                 0,
                                 Math.min(
-                                        transformedOperation
-                                                .deleteCount(),
+                                        transformedOperation.deleteCount(),
                                         currentCode.length()
                                                 - position
                                 )
                         );
+
+                // ==================================
+                // CAPTURE DELETED TEXT
+                // ==================================
+
+                String deletedText =
+                        "";
+
+                if (deleteCount > 0) {
+
+                    deletedText =
+                            currentCode.substring(
+                                    position,
+                                    position + deleteCount
+                            );
+                }
 
                 // ==================================
                 // INSERT TEXT
@@ -496,7 +598,7 @@ public class CodeWebSocketHandler
                                 : transformedOperation.text();
 
                 // ==================================
-                // APPLY OPERATION
+                // APPLY
                 // ==================================
 
                 String newCode =
@@ -529,7 +631,7 @@ public class CodeWebSocketHandler
                         );
 
                 // ==================================
-                // CREATE APPLIED OPERATION
+                // APPLIED OPERATION
                 // ==================================
 
                 Operation appliedOperation =
@@ -542,7 +644,7 @@ public class CodeWebSocketHandler
                         );
 
                 // ==================================
-                // SAVE TO HISTORY
+                // SAVE OPERATION HISTORY
                 // ==================================
 
                 synchronized (history) {
@@ -551,6 +653,43 @@ public class CodeWebSocketHandler
                             appliedOperation
                     );
                 }
+
+                // ==================================
+                // SAVE UNDO ENTRY
+                // ==================================
+
+                OperationHistoryEntry historyEntry =
+                        new OperationHistoryEntry(
+                                appliedOperation,
+                                deletedText,
+                                newVersion
+                        );
+
+                Deque<OperationHistoryEntry>
+                        undoStack =
+                        undoStacks.computeIfAbsent(
+                                transformedOperation.userId(),
+                                key ->
+                                        new ConcurrentLinkedDeque<>()
+                        );
+
+                undoStack.push(
+                        historyEntry
+                );
+
+                // ==================================
+                // NEW EDIT CLEARS REDO
+                // ==================================
+
+                Deque<OperationHistoryEntry>
+                        redoStack =
+                        redoStacks.computeIfAbsent(
+                                transformedOperation.userId(),
+                                key ->
+                                        new ConcurrentLinkedDeque<>()
+                        );
+
+                redoStack.clear();
 
                 // ==================================
                 // BROADCAST
@@ -563,8 +702,8 @@ public class CodeWebSocketHandler
                 );
 
                 System.out.println(
-                        "Operation applied."
-                                + " Version = "
+                        "Operation applied. "
+                                + "Version = "
                                 + newVersion
                                 + " Position = "
                                 + position
@@ -584,6 +723,501 @@ public class CodeWebSocketHandler
 
                 e.printStackTrace();
             }
+        }
+    }
+
+    // ==========================================
+    // PROCESS UNDO
+    // ==========================================
+
+    private void processUndo(
+            String userId,
+            String sessionCode) {
+
+        Deque<OperationHistoryEntry>
+                undoStack =
+                undoStacks.get(
+                        userId
+                );
+
+        if (undoStack == null ||
+                undoStack.isEmpty()) {
+
+            return;
+        }
+
+        OperationHistoryEntry entry =
+                undoStack.poll();
+
+        if (entry == null) {
+            return;
+        }
+
+        try {
+
+            CodeSession codeSession =
+                    repository.findBySessionCode(
+                            sessionCode
+                    ).orElse(null);
+
+            if (codeSession == null) {
+                return;
+            }
+
+            String currentCode =
+                    codeSession.getCode();
+
+            if (currentCode == null) {
+                currentCode = "";
+            }
+
+            long currentVersion =
+                    roomVersions.getOrDefault(
+                            sessionCode,
+                            0L
+                    );
+
+            Operation original =
+                    entry.operation();
+
+            // ==================================
+            // CREATE INVERSE OPERATION
+            // ==================================
+
+            int insertedLength =
+                    original.text() == null
+                            ? 0
+                            : original.text().length();
+
+            Operation inverse =
+                    new Operation(
+                            userId,
+                            original.position(),
+                            insertedLength,
+                            entry.deletedText(),
+                            currentVersion
+                    );
+
+            // ==================================
+            // GET HISTORY
+            // ==================================
+
+            List<Operation> history =
+                    operationHistory.get(
+                            sessionCode
+                    );
+
+            Operation transformedInverse =
+                    inverse;
+
+            // ==================================
+            // TRANSFORM UNDO
+            // ==================================
+
+            if (history != null) {
+
+                synchronized (history) {
+
+                    int startIndex =
+                            (int) Math.max(
+                                    0,
+                                    entry.version()
+                            );
+
+                    int endIndex =
+                            Math.min(
+                                    (int) currentVersion,
+                                    history.size()
+                            );
+
+                    for (
+                            int i = startIndex;
+                            i < endIndex;
+                            i++
+                    ) {
+
+                        transformedInverse =
+                                OperationTransformer.transform(
+                                        transformedInverse,
+                                        history.get(i)
+                                );
+                    }
+                }
+            }
+
+            // ==================================
+            // SAFE POSITION
+            // ==================================
+
+            int position =
+                    Math.max(
+                            0,
+                            Math.min(
+                                    transformedInverse.position(),
+                                    currentCode.length()
+                            )
+                    );
+
+            // ==================================
+            // SAFE DELETE COUNT
+            // ==================================
+
+            int deleteCount =
+                    Math.max(
+                            0,
+                            Math.min(
+                                    transformedInverse.deleteCount(),
+                                    currentCode.length()
+                                            - position
+                            )
+                    );
+
+            // ==================================
+            // INSERT TEXT
+            // ==================================
+
+            String insertText =
+                    transformedInverse.text() == null
+                            ? ""
+                            : transformedInverse.text();
+
+            // ==================================
+            // APPLY UNDO
+            // ==================================
+
+            String newCode =
+                    currentCode.substring(
+                            0,
+                            position
+                    )
+                    + insertText
+                    + currentCode.substring(
+                            position + deleteCount
+                    );
+
+            codeSession.setCode(
+                    newCode
+            );
+
+            repository.save(
+                    codeSession
+            );
+
+            // ==================================
+            // NEW VERSION
+            // ==================================
+
+            long newVersion =
+                    roomVersions.merge(
+                            sessionCode,
+                            1L,
+                            Long::sum
+                    );
+
+            // ==================================
+            // APPLIED UNDO
+            // ==================================
+
+            Operation appliedUndo =
+                    new Operation(
+                            userId,
+                            position,
+                            deleteCount,
+                            insertText,
+                            currentVersion
+                    );
+
+            if (history != null) {
+
+                synchronized (history) {
+
+                    history.add(
+                            appliedUndo
+                    );
+                }
+            }
+
+            // ==================================
+            // MOVE ENTRY TO REDO
+            // ==================================
+
+            redoStacks
+                    .computeIfAbsent(
+                            userId,
+                            key ->
+                                    new ConcurrentLinkedDeque<>()
+                    )
+                    .push(entry);
+
+            // ==================================
+            // BROADCAST TO EVERYONE
+            // ==================================
+
+            broadcastOperationToAll(
+                    sessionCode,
+                    appliedUndo,
+                    newVersion
+            );
+
+            System.out.println(
+                    "UNDO applied. "
+                            + "Version = "
+                            + newVersion
+            );
+
+        } catch (Exception e) {
+
+            System.out.println(
+                    "Undo error: "
+                            + e.getMessage()
+            );
+
+            e.printStackTrace();
+        }
+    }
+
+    // ==========================================
+    // PROCESS REDO
+    // ==========================================
+
+    private void processRedo(
+            String userId,
+            String sessionCode) {
+
+        Deque<OperationHistoryEntry>
+                redoStack =
+                redoStacks.get(
+                        userId
+                );
+
+        if (redoStack == null ||
+                redoStack.isEmpty()) {
+
+            return;
+        }
+
+        OperationHistoryEntry entry =
+                redoStack.poll();
+
+        if (entry == null) {
+            return;
+        }
+
+        try {
+
+            CodeSession codeSession =
+                    repository.findBySessionCode(
+                            sessionCode
+                    ).orElse(null);
+
+            if (codeSession == null) {
+                return;
+            }
+
+            String currentCode =
+                    codeSession.getCode();
+
+            if (currentCode == null) {
+                currentCode = "";
+            }
+
+            long currentVersion =
+                    roomVersions.getOrDefault(
+                            sessionCode,
+                            0L
+                    );
+
+            Operation original =
+                    entry.operation();
+
+            // ==================================
+            // CREATE REDO OPERATION
+            // ==================================
+
+            Operation redoOperation =
+                    new Operation(
+                            userId,
+                            original.position(),
+                            original.deleteCount(),
+                            original.text(),
+                            currentVersion
+                    );
+
+            // ==================================
+            // GET HISTORY
+            // ==================================
+
+            List<Operation> history =
+                    operationHistory.get(
+                            sessionCode
+                    );
+
+            Operation transformedRedo =
+                    redoOperation;
+
+            // ==================================
+            // TRANSFORM REDO
+            // ==================================
+
+            if (history != null) {
+
+                synchronized (history) {
+
+                    int startIndex =
+                            (int) Math.max(
+                                    0,
+                                    entry.version()
+                            );
+
+                    int endIndex =
+                            Math.min(
+                                    (int) currentVersion,
+                                    history.size()
+                            );
+
+                    for (
+                            int i = startIndex;
+                            i < endIndex;
+                            i++
+                    ) {
+
+                        transformedRedo =
+                                OperationTransformer.transform(
+                                        transformedRedo,
+                                        history.get(i)
+                                );
+                    }
+                }
+            }
+
+            // ==================================
+            // SAFE POSITION
+            // ==================================
+
+            int position =
+                    Math.max(
+                            0,
+                            Math.min(
+                                    transformedRedo.position(),
+                                    currentCode.length()
+                            )
+                    );
+
+            // ==================================
+            // SAFE DELETE COUNT
+            // ==================================
+
+            int deleteCount =
+                    Math.max(
+                            0,
+                            Math.min(
+                                    transformedRedo.deleteCount(),
+                                    currentCode.length()
+                                            - position
+                            )
+                    );
+
+            // ==================================
+            // INSERT TEXT
+            // ==================================
+
+            String insertText =
+                    transformedRedo.text() == null
+                            ? ""
+                            : transformedRedo.text();
+
+            // ==================================
+            // APPLY REDO
+            // ==================================
+
+            String newCode =
+                    currentCode.substring(
+                            0,
+                            position
+                    )
+                    + insertText
+                    + currentCode.substring(
+                            position + deleteCount
+                    );
+
+            codeSession.setCode(
+                    newCode
+            );
+
+            repository.save(
+                    codeSession
+            );
+
+            // ==================================
+            // NEW VERSION
+            // ==================================
+
+            long newVersion =
+                    roomVersions.merge(
+                            sessionCode,
+                            1L,
+                            Long::sum
+                    );
+
+            // ==================================
+            // APPLIED REDO
+            // ==================================
+
+            Operation appliedRedo =
+                    new Operation(
+                            userId,
+                            position,
+                            deleteCount,
+                            insertText,
+                            currentVersion
+                    );
+
+            if (history != null) {
+
+                synchronized (history) {
+
+                    history.add(
+                            appliedRedo
+                    );
+                }
+            }
+
+            // ==================================
+            // MOVE ENTRY BACK TO UNDO
+            // ==================================
+
+            undoStacks
+                    .computeIfAbsent(
+                            userId,
+                            key ->
+                                    new ConcurrentLinkedDeque<>()
+                    )
+                    .push(entry);
+
+            // ==================================
+            // BROADCAST TO EVERYONE
+            // ==================================
+
+            broadcastOperationToAll(
+                    sessionCode,
+                    appliedRedo,
+                    newVersion
+            );
+
+            System.out.println(
+                    "REDO applied. "
+                            + "Version = "
+                            + newVersion
+            );
+
+        } catch (Exception e) {
+
+            System.out.println(
+                    "Redo error: "
+                            + e.getMessage()
+            );
+
+            e.printStackTrace();
         }
     }
 
@@ -632,17 +1266,77 @@ public class CodeWebSocketHandler
 
             try {
 
-                /*
-                 * IMPORTANT:
-                 *
-                 * Sender ko uski own operation
-                 * dobara nahi bhejni.
-                 */
+                // Normal operation:
+                // sender already has the change.
 
                 if (user.isOpen()
                         && !user.getId().equals(
                                 operation.userId()
                         )) {
+
+                    user.sendMessage(
+                            new TextMessage(
+                                    message
+                            )
+                    );
+                }
+
+            } catch (Exception e) {
+
+                System.out.println(
+                        "Broadcast error: "
+                                + e.getMessage()
+                );
+            }
+        }
+    }
+
+    // ==========================================
+    // BROADCAST OPERATION TO ALL
+    // ==========================================
+
+    private void broadcastOperationToAll(
+            String sessionCode,
+            Operation operation,
+            long version) {
+
+        Set<WebSocketSession> users =
+                rooms.get(
+                        sessionCode
+                );
+
+        if (users == null) {
+            return;
+        }
+
+        String message =
+                "{"
+                        + "\"type\":\"operation\","
+                        + "\"position\":"
+                        + operation.position()
+                        + ","
+                        + "\"deleteCount\":"
+                        + operation.deleteCount()
+                        + ","
+                        + "\"text\":"
+                        + objectMapper.valueToTree(
+                                operation.text()
+                        )
+                        + ","
+                        + "\"version\":"
+                        + version
+                        + ","
+                        + "\"userId\":"
+                        + objectMapper.valueToTree(
+                                operation.userId()
+                        )
+                        + "}";
+
+        for (WebSocketSession user : users) {
+
+            try {
+
+                if (user.isOpen()) {
 
                     user.sendMessage(
                             new TextMessage(
@@ -806,6 +1500,15 @@ public class CodeWebSocketHandler
                         session.getId()
                 );
 
+        // Remove user's undo/redo stacks
+        undoStacks.remove(
+                session.getId()
+        );
+
+        redoStacks.remove(
+                session.getId()
+        );
+
         if (sessionCode != null) {
 
             Set<WebSocketSession> users =
@@ -815,7 +1518,9 @@ public class CodeWebSocketHandler
 
             if (users != null) {
 
-                users.remove(session);
+                users.remove(
+                        session
+                );
 
                 if (users.isEmpty()) {
 

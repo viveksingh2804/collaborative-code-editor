@@ -6,14 +6,9 @@ function App() {
 
   const socket = useRef(null);
   const editorRef = useRef(null);
+  const monacoRef = useRef(null);
 
-  // Monaco listener
-  const changeListenerRef = useRef(null);
-
-  // Remote change ko identify karne ke liye
-  const remoteChange = useRef(false);
-
-  // Server document version
+  const applyingRemote = useRef(false);
   const versionRef = useRef(0);
 
   const params =
@@ -26,9 +21,9 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [userCount, setUserCount] = useState(0);
 
-  // ==========================
+  // ==========================================
   // WEBSOCKET
-  // ==========================
+  // ==========================================
 
   useEffect(() => {
 
@@ -67,30 +62,20 @@ function App() {
         const data =
           JSON.parse(event.data);
 
-        // ==========================
-        // INITIAL CODE
-        // ==========================
+        // ==================================
+        // CODE
+        // ==================================
 
         if (data.type === "code") {
 
-          remoteChange.current = true;
-
-          if (
-            data.version !== undefined
-          ) {
-            versionRef.current =
-              data.version;
-          }
+          applyingRemote.current = true;
 
           setCode(data.code);
 
-          const editor =
-            editorRef.current;
-
-          if (editor) {
+          if (editorRef.current) {
 
             const model =
-              editor.getModel();
+              editorRef.current.getModel();
 
             if (
               model &&
@@ -103,126 +88,64 @@ function App() {
             }
           }
 
-          // Monaco event fire hone ke baad
-          // remote flag reset hoga
-          setTimeout(() => {
-
-            remoteChange.current =
-              false;
-
-          }, 0);
-
-          return;
-        }
-
-        // ==========================
-        // VERSION
-        // ==========================
-
-        if (data.type === "version") {
-
-          versionRef.current =
-            data.version;
-
-          console.log(
-            "CURRENT VERSION:",
-            versionRef.current
-          );
-
-          return;
-        }
-
-        // ==========================
-        // REMOTE OPERATION
-        // ==========================
-
-        if (
-          data.type === "operation"
-        ) {
-
-          const editor =
-            editorRef.current;
-
-          if (!editor) {
-            return;
-          }
-
-          const model =
-            editor.getModel();
-
-          if (!model) {
-            return;
-          }
-
-          remoteChange.current = true;
-
-          const position =
-            Math.max(
-              0,
-              Math.min(
-                data.position,
-                model.getValueLength()
-              )
-            );
-
-          const deleteCount =
-            Math.max(
-              0,
-              Math.min(
-                data.deleteCount,
-                model.getValueLength()
-                  - position
-              )
-            );
-
-          const insertText =
-            data.text || "";
-
-          // Monaco ka native edit
-          model.pushEditOperations(
-            [],
-            [
-              {
-                range: getRangeFromOffset(
-  model,
-  position,
-  deleteCount
-),
-                text: insertText
-              }
-            ],
-            () => null
-          );
-
           if (
-            data.version !== undefined
+            typeof data.version === "number"
           ) {
+
             versionRef.current =
               data.version;
           }
 
-          setCode(
-            model.getValue()
-          );
-
           setTimeout(() => {
 
-            remoteChange.current =
+            applyingRemote.current =
               false;
 
-          }, 0);
+          }, 50);
 
           return;
         }
 
-        // ==========================
+        // ==================================
+        // VERSION
+        // ==================================
+
+        if (data.type === "version") {
+
+          versionRef.current =
+              data.version;
+
+          console.log(
+            "VERSION:",
+            data.version
+          );
+
+          return;
+        }
+
+        // ==================================
         // USER COUNT
-        // ==========================
+        // ==================================
 
         if (data.type === "users") {
 
           setUserCount(
             data.count
+          );
+
+          return;
+        }
+
+        // ==================================
+        // REMOTE OPERATION
+        // ==================================
+
+        if (
+          data.type === "operation"
+        ) {
+
+          applyRemoteOperation(
+            data
           );
 
           return;
@@ -256,143 +179,292 @@ function App() {
 
     return () => {
 
-      if (
-        changeListenerRef.current
-      ) {
-
-        changeListenerRef.current.dispose();
-
-        changeListenerRef.current =
-          null;
-      }
-
       ws.close();
+
     };
 
   }, [sessionId]);
 
-  // ==========================
-  // EDITOR MOUNT
-  // ==========================
+  // ==========================================
+  // APPLY REMOTE OPERATION
+  // ==========================================
 
-  const handleEditorMount =
-    (editor) => {
+  const applyRemoteOperation = (operation) => {
 
-      editorRef.current =
-        editor;
+    const editor =
+      editorRef.current;
 
-      // IMPORTANT:
-      // React onChange ki jagah
-      // Monaco native change event
+    if (!editor) {
+      return;
+    }
 
-      changeListenerRef.current =
-        editor.onDidChangeModelContent(
-          (event) => {
+    const model =
+      editor.getModel();
 
-            // Remote operation hai
-            // to server ko wapas mat bhejo
-            if (
-              remoteChange.current
-            ) {
-              return;
-            }
+    if (!model) {
+      return;
+    }
 
-            if (
-              !socket.current ||
-              socket.current.readyState !==
-                WebSocket.OPEN
-            ) {
-              return;
-            }
+    applyingRemote.current = true;
 
-            if (
-              !event.changes ||
-              event.changes.length === 0
-            ) {
-              return;
-            }
+    const position =
+      Math.max(
+        0,
+        Math.min(
+          operation.position,
+          model.getValueLength()
+        )
+      );
 
-            // Monaco normally ek user action
-            // ko ek ya multiple changes mein
-            // bhej sakta hai.
-            //
-            // Changes ko reverse order mein
-            // process karenge taaki positions
-            // disturb na hon.
+    const deleteCount =
+      Math.max(
+        0,
+        Math.min(
+          operation.deleteCount || 0,
+          model.getValueLength() - position
+        )
+      );
 
-            const changes =
-              [...event.changes]
-                .sort(
-                  (a, b) =>
-                    b.rangeOffset -
-                    a.rangeOffset
-                );
+    const range =
+      model.getPositionAt(position);
 
-            changes.forEach(
-              (change) => {
+    const end =
+      model.getPositionAt(
+        position + deleteCount
+      );
 
-                const operation = {
+    editor.executeEdits(
+      "remote-operation",
+      [
+        {
+          range: {
+            startLineNumber:
+              range.lineNumber,
 
-                  type: "operation",
+            startColumn:
+              range.column,
 
-                  sessionId:
-                    sessionId,
+            endLineNumber:
+              end.lineNumber,
 
-                  position:
-                    change.rangeOffset,
+            endColumn:
+              end.column
+          },
 
-                  deleteCount:
-                    change.rangeLength,
-
-                  text:
-                    change.text,
-
-                  baseVersion:
-                    versionRef.current
-                };
-
-                socket.current.send(
-                  JSON.stringify(
-                    operation
-                  )
-                );
-
-                console.log(
-                  "SENT OPERATION:",
-                  operation
-                );
-
-                // Local document operation
-                // server queue mein process hoga.
-                versionRef.current++;
-              }
-            );
-
-            setCode(
-              editor.getValue()
-            );
-          }
-        );
-    };
-
-  // ==========================
-  // SHARE
-  // ==========================
-
-  const shareSession = () => {
-
-    navigator.clipboard.writeText(
-      window.location.href
+          text:
+            operation.text || ""
+        }
+      ]
     );
 
-    alert(
-      "Session link copied!"
+    setCode(
+      model.getValue()
+    );
+
+    if (
+      typeof operation.version === "number"
+    ) {
+
+      versionRef.current =
+        operation.version;
+    }
+
+    setTimeout(() => {
+
+      applyingRemote.current =
+        false;
+
+    }, 50);
+  };
+
+  // ==========================================
+  // EDITOR MOUNT
+  // ==========================================
+
+  const handleEditorMount =
+      (editor, monaco) => {
+
+    editorRef.current =
+      editor;
+
+    monacoRef.current =
+      monaco;
+
+    // ======================================
+    // CTRL + Z
+    // ======================================
+
+    editor.addCommand(
+      monaco.KeyMod.CtrlCmd |
+      monaco.KeyCode.KeyZ,
+      () => {
+
+        sendHistoryAction(
+          "undo"
+        );
+      }
+    );
+
+    // ======================================
+    // CTRL + Y
+    // ======================================
+
+    editor.addCommand(
+      monaco.KeyMod.CtrlCmd |
+      monaco.KeyCode.KeyY,
+      () => {
+
+        sendHistoryAction(
+          "redo"
+        );
+      }
+    );
+
+    // ======================================
+    // MAC CMD + SHIFT + Z
+    // ======================================
+
+    editor.addCommand(
+      monaco.KeyMod.CtrlCmd |
+      monaco.KeyMod.Shift |
+      monaco.KeyCode.KeyZ,
+      () => {
+
+        sendHistoryAction(
+          "redo"
+        );
+      }
+    );
+
+    console.log(
+      "MONACO READY"
     );
   };
 
-  // ==========================
-  // UI
-  // ==========================
+  // ==========================================
+  // SEND UNDO / REDO
+  // ==========================================
+
+  const sendHistoryAction =
+      (action) => {
+
+    if (
+      !socket.current ||
+      socket.current.readyState !==
+        WebSocket.OPEN
+    ) {
+
+      return;
+    }
+
+    socket.current.send(
+      JSON.stringify({
+        type: action
+      })
+    );
+
+    console.log(
+      "SENT:",
+      action
+    );
+  };
+
+  // ==========================================
+  // LOCAL EDIT
+  // ==========================================
+
+  // ==========================================
+// LOCAL EDIT
+// ==========================================
+
+const handleEditorChange =
+    (value, event) => {
+
+  const newCode =
+    value || "";
+
+  setCode(newCode);
+
+  // Remote operation ko server par
+  // dobara mat bhejo.
+  if (applyingRemote.current) {
+    return;
+  }
+
+  if (
+    !socket.current ||
+    socket.current.readyState !==
+      WebSocket.OPEN
+  ) {
+    return;
+  }
+
+  if (
+    !event ||
+    !event.changes ||
+    event.changes.length === 0
+  ) {
+    return;
+  }
+
+  const changes =
+    [...event.changes]
+      .sort(
+        (a, b) =>
+          b.rangeOffset -
+          a.rangeOffset
+      );
+
+  for (const change of changes) {
+
+    // IMPORTANT:
+    // Har local operation ko current
+    // local version milega.
+    const baseVersion =
+      versionRef.current;
+
+    const operation = {
+
+      type: "operation",
+
+      sessionId:
+        sessionId,
+
+      position:
+        change.rangeOffset,
+
+      deleteCount:
+        change.rangeLength,
+
+      text:
+        change.text || "",
+
+      baseVersion:
+        baseVersion
+    };
+
+    socket.current.send(
+      JSON.stringify(operation)
+    );
+
+    // IMPORTANT:
+    // Apne operation ko immediately
+    // next local operation ke liye
+    // next version maan rahe hain.
+    versionRef.current =
+      baseVersion + 1;
+
+    console.log(
+      "SENT OPERATION:",
+      operation
+    );
+  }
+};
+
+
+  // ==========================================
+  // RENDER
+  // ==========================================
 
   return (
 
@@ -427,7 +499,16 @@ function App() {
 
         <button
           className="share-button"
-          onClick={shareSession}
+          onClick={() => {
+
+            navigator.clipboard.writeText(
+              window.location.href
+            );
+
+            alert(
+              "Session link copied!"
+            );
+          }}
         >
           🔗 Share
         </button>
@@ -441,8 +522,14 @@ function App() {
           language="java"
           theme="vs-dark"
           value={code}
-          onMount={handleEditorMount}
+          onMount={
+            handleEditorMount
+          }
+          onChange={
+            handleEditorChange
+          }
           options={{
+
             fontSize: 16,
 
             minimap: {
@@ -452,7 +539,12 @@ function App() {
             automaticLayout: true,
 
             scrollBeyondLastLine:
-              false
+              false,
+
+            // Monaco ka internal
+            // undo/redo disabled.
+            undoRedo:
+              true
           }}
         />
 
@@ -460,39 +552,6 @@ function App() {
 
     </div>
   );
-}
-
-// =================================
-// Convert character offset → Monaco Range
-// =================================
-
-function getRangeFromOffset(
-  model,
-  offset,
-  deleteCount
-) {
-
-  const start =
-    model.getPositionAt(offset);
-
-  const end =
-    model.getPositionAt(
-      offset + deleteCount
-    );
-
-  return {
-    startLineNumber:
-      start.lineNumber,
-
-    startColumn:
-      start.column,
-
-    endLineNumber:
-      end.lineNumber,
-
-    endColumn:
-      end.column
-  };
 }
 
 export default App;
