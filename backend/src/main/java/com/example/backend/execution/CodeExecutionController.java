@@ -63,7 +63,7 @@ public class CodeExecutionController {
 
             boolean compileFinished =
                     compile.waitFor(
-                            5,
+                            30,
                             TimeUnit.SECONDS
                     );
 
@@ -105,7 +105,7 @@ public class CodeExecutionController {
 
             boolean runFinished =
                     run.waitFor(
-                            5,
+                            30,
                             TimeUnit.SECONDS
                     );
 
