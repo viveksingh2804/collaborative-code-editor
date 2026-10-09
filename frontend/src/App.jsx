@@ -28,9 +28,9 @@ function App() {
 
   useEffect(() => {
 
-const ws = new WebSocket(
-  "wss://scholarship-troubleshooting-instrumentation-expertise.trycloudflare.com/ws"
-);
+const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:8080";
+
+const ws = new WebSocket(`${WS_URL}/ws`);
 
     socket.current = ws;
 
@@ -468,8 +468,10 @@ const runCode = async () => {
 
   try {
 
-   const response = await fetch(
-  "https://scholarship-troubleshooting-instrumentation-expertise.trycloudflare.com/api/execute",
+   const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8080";
+  const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:8080";
+const response = await fetch(
+  `${API_URL}/api/execute`,
   {
     method: "POST",
     headers: {
