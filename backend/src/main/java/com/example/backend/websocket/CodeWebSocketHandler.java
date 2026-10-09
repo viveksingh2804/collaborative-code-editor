@@ -2,7 +2,7 @@ package com.example.backend.websocket;
 
 import com.example.backend.session.CodeSession;
 import com.example.backend.session.CodeSessionRepository;
-
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -64,7 +64,9 @@ public class CodeWebSocketHandler
     // sessionId -> single executor
     private final Map<String, ExecutorService> roomExecutors =
             new ConcurrentHashMap<>();
-
+// sessionId -> worker active status
+private final Map<String, AtomicBoolean> roomWorkers =
+        new ConcurrentHashMap<>();
     // ==========================================
     // OPERATION HISTORY
     // ==========================================
@@ -247,68 +249,48 @@ public class CodeWebSocketHandler
 
         if (type.equals("operation")) {
 
-            String sessionCode =
-                    userRooms.get(
-                            session.getId()
-                    );
+    String sessionCode =
+            userRooms.get(session.getId());
 
-            if (sessionCode == null) {
-                return;
-            }
+    if (sessionCode == null) {
+        return;
+    }
 
-            int position =
-                    data.get("position").asInt();
+    int position = data.get("position").asInt();
+    int deleteCount = data.get("deleteCount").asInt();
 
-            int deleteCount =
-                    data.get("deleteCount").asInt();
+    String text = data.has("text")
+            ? data.get("text").asText()
+            : "";
 
-            String text =
-                    data.has("text")
-                            ? data.get("text").asText()
-                            : "";
+    long baseVersion = data.has("baseVersion")
+            ? data.get("baseVersion").asLong()
+            : 0L;
 
-            long baseVersion =
-                    data.has("baseVersion")
-                            ? data.get("baseVersion").asLong()
-                            : 0L;
+    Operation operation = new Operation(
+            session.getId(),
+            position,
+            deleteCount,
+            text,
+            baseVersion
+    );
 
-            Operation operation =
-                    new Operation(
-                            session.getId(),
-                            position,
-                            deleteCount,
-                            text,
-                            baseVersion
-                    );
+    ConcurrentLinkedQueue<Operation> queue =
+            operationQueues.get(sessionCode);
 
-            ConcurrentLinkedQueue<Operation>
-                    queue =
-                    operationQueues.get(
-                            sessionCode
-                    );
+    ExecutorService executor =
+            roomExecutors.get(sessionCode);
 
-            if (queue == null) {
-                return;
-            }
+    if (queue == null || executor == null) {
+        return;
+    }
 
-            queue.offer(operation);
+    queue.offer(operation);
 
-            ExecutorService executor =
-                    roomExecutors.get(
-                            sessionCode
-                    );
+    executor.submit(() -> processOperation(sessionCode));
 
-            if (executor != null) {
-
-                executor.submit(() ->
-                        processOperation(
-                                sessionCode
-                        )
-                );
-            }
-
-            return;
-        }
+    return;
+}
 
         // ==========================================
         // UNDO
@@ -701,18 +683,7 @@ public class CodeWebSocketHandler
                         newVersion
                 );
 
-                System.out.println(
-                        "Operation applied. "
-                                + "Version = "
-                                + newVersion
-                                + " Position = "
-                                + position
-                                + " Delete = "
-                                + deleteCount
-                                + " Text = ["
-                                + insertText
-                                + "]"
-                );
+                
 
             } catch (Exception e) {
 
