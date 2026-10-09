@@ -454,10 +454,7 @@ const handleEditorChange =
     versionRef.current =
       baseVersion + 1;
 
-    console.log(
-      "SENT OPERATION:",
-      operation
-    );
+    
   }
 };
 
