@@ -3,6 +3,19 @@ import Editor from "@monaco-editor/react";
 import "./App.css";
 
 function App() {
+  const [theme, setTheme] = useState(
+    () => localStorage.getItem("collabcode-theme") || "dark"
+  );
+
+  useEffect(() => {
+    localStorage.setItem("collabcode-theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  };
+
+  // Tumhara baaki existing code yahan rahega
 
   const socket = useRef(null);
   const editorRef = useRef(null);
@@ -11,17 +24,17 @@ function App() {
   const applyingRemote = useRef(false);
   const versionRef = useRef(0);
 
-  const params =
-    new URLSearchParams(window.location.search);
-
-  const sessionId =
-    params.get("session") || "ABC123";
+  const params = new URLSearchParams(window.location.search);
+  const sessionId = params.get("session") || "ABC123";
 
   const [code, setCode] = useState("");
   const [connected, setConnected] = useState(false);
   const [userCount, setUserCount] = useState(0);
   const [output, setOutput] = useState("");
-  const [running, setRunning] = useState(false);  
+  const [running, setRunning] = useState(false);
+
+  // Apna existing WebSocket useEffect aur baaki
+  // functions yahan bilkul waise hi rakho.
   // ==========================================
   // WEBSOCKET
   // ==========================================
@@ -512,10 +525,17 @@ const response = await fetch(
 
   return (
 
-    <div className="app">
+    <div className={`app ${theme}-mode`}>
 
       <header className="header">
-
+    <button
+  className="theme-toggle"
+  onClick={toggleTheme}
+  title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+  aria-label="Toggle color theme"
+>
+  {theme === "dark" ? "☀️" : "🌙"}
+</button>
         <div className="logo">
           ⚡ CollabCode
         </div>
@@ -574,7 +594,7 @@ const response = await fetch(
         <Editor
           height="100%"
           language="java"
-          theme="vs-dark"
+          theme={theme === "dark" ? "vs-dark" : "light"}
           value={code}
           onMount={
             handleEditorMount
